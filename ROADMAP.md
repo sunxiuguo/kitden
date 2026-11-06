@@ -1,6 +1,6 @@
 # Kitden roadmap
 
-Last updated: 2026-11-05
+Last updated: 2026-11-06
 
 What Kitden does today and what comes next. Ideas and bugs:
 [open an issue](https://github.com/KonstantinStarovoytov/kitden/issues).
@@ -8,6 +8,9 @@ What Kitden does today and what comes next. Ideas and bugs:
 ## Done
 
 ### Not released yet
+
+- **Current Library API only:** removed the unused `/api/library` route and its old table
+  filters. Tests use the grouped Library List, maps, offers and Gateway that the page uses.
 
 - **README in four parts:** the map, find and add, the gateway, and why it is safe. It shows a
   search of the catalogs and names the Claude Code plugin.

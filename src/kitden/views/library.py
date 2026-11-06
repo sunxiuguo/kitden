@@ -1,4 +1,4 @@
-"""The Library: one list per kind of what each client has and what it can add.
+"""The Library List: installed plugins, skills, hooks and instruction files.
 
 Rows join the load map (what is on this computer) with the plugin and skill catalogs (what the
 marketplaces on this computer offer). Each cell already says the state, or the one action for
@@ -7,22 +7,17 @@ Kitden could not read: their cells say Unknown and offer no add. A row where a c
 the name but another source says "Needs review" there and offers no add.
 """
 
-from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
 from kitden.changes.actions import (
-    KITDEN_GATEWAY,
-    MCP_ADD,
     PLUGIN_INSTALL,
     PLUGIN_SKILLS,
     SKILL_INSTALL,
-    add_refusals,
 )
-from kitden.clients.base import REMOVE_DIRECT, SETUP_NAME, found_columns, is_direct_entry, is_home
+from kitden.clients.base import found_columns, is_home
 from kitden.model import CLIENT_WORDS, CLIENTS, ClientStatus, Item, ItemKind, Scope, _hash
-from kitden.views.catalog import catalog, search
-from kitden.views.findings import group_of
+from kitden.views.catalog import catalog
 from kitden.views.instructions_map import instructions_map
 from kitden.views.library_map import OTHER, cursor_imports, library_map
 from kitden.views.load_map import MARKS, Row, load_map
@@ -32,7 +27,6 @@ from kitden.views.words import (
     CLIENT_UNREAD,
     NO_ADD_REVIEW,
     NO_ADD_UNREAD,
-    NO_PROJECT_SERVER,
     NOT_SAME,
     NOT_SHOWN,
     ORIGIN_WORDS,
@@ -41,14 +35,9 @@ from kitden.views.words import (
     STATE_WORDS,
 )
 
-KINDS = ("mcp_server", "plugin", "skill", "hook", "marketplace", "instructions")
-# Tabs with something to add; the others show only what is on this computer.
-CATALOG_KINDS = ("plugin", "skill")
-SHOWS = ("mine", "new", "all")
 VIA_CLAUDE_CODE = "Cursor loads Claude Code's plugins. Add it to Claude Code."
 SKILL_VIA_CLAUDE_CODE = "Cursor loads Claude Code's plugins. Add the plugin to Claude Code."
 OUTSIDE_FOLDER = "This skill uses files outside its folder, so it can't be copied."
-SHARE_IN_GATEWAY = "Move it into the gateway to share it."
 # Where a plugin goes into one project when Kitden cannot put it there.
 # checked 2026-10-22 (learn.chatgpt.com/docs/plugins): Codex installs a plugin for its whole
 # environment; the docs show no per-project install.
@@ -136,12 +125,8 @@ def _row(
     source: str | None,
     cells: dict[str, dict],
     *,
-    mine: bool,
     lookup: str | None,
-    offer: str | None = None,
     flags: list[dict] | None = None,
-    category: str | None = None,
-    description: str = "",
 ) -> dict:
     return {
         "key": key,
@@ -149,11 +134,7 @@ def _row(
         "name": name,
         "source": source,
         "same_name": False,
-        "category": category,
-        "description": description,
-        "mine": mine,
         "lookup": lookup,
-        "offer": offer,
         "flags": flags or [],
         "cells": cells,
     }
@@ -179,166 +160,31 @@ def _map_cell(row: Row, client: str) -> dict:
 
 # Each builder gives (row, holders): holders are the found clients that have the item.
 Built = list[tuple[dict, set[str]]]
-# Why a client has a dash in a load map row, or None when no reason is true.
-Why = Callable[[Row, str], str | None]
-# The add a client with a dash in a load map row gets, or None.
-Add = Callable[[Row, str], dict | None]
 
 
 def _map_rows(
     map_rows: list[Row],
     kind: str,
     found: list[str],
-    why: Why | None = None,
-    add: Add | None = None,
 ) -> Built:
-    """MCP servers, hooks and marketplaces: the load map rows as they are, an add on a dash
-    where `add` has one, else a reason where `why` has one."""
+    """Hook rows from the load map, with no add action."""
     out = []
     for r in map_rows:
         if str(r.kind) != kind:
             continue
         holders = {c for c in found if _has(r, c)}
         cells = {c: _map_cell(r, c) for c in found}
-        for client, cell in cells.items():
-            if cell["state"] != "none":
-                continue
-            if add:
-                cell["add"] = add(r, client)
-            if why and not cell["add"]:
-                cell["reason"] = why(r, client)
         row = _row(
             r.key,
             kind,
             r.name,
             r.source,
             cells,
-            mine=bool(holders),
             lookup=r.lookup,
             flags=r.flags,
-            category=r.category,
         )
         out.append((row, holders))
     return out
-
-
-def _refusals(adapters, items: list[Item]):
-    """Why each client cannot take a direct server, by item id, read once (`add_refusals`)."""
-    by_id = {i.id: i for i in items}
-    found: dict[str, dict[str, str]] = {}
-
-    def refused(item_id: str) -> dict[str, str]:
-        if item_id not in found:
-            item = by_id.get(item_id)
-            found[item_id] = add_refusals(adapters, item) if item else {}
-        return found[item_id]
-
-    return refused
-
-
-def _server_add(found: list[str], items: list[Item], refused=lambda item_id: {}) -> Add:
-    """A direct user-scope server one client loads: the other clients Kitden writes can add
-    it, unless a client cannot take it (`refused`: why, by client). The source is the first
-    such entry in column order. A row a gateway serves has none."""
-    by_id = {i.id: i for i in items}
-
-    def source(row: Row) -> str | None:
-        for client in found:
-            if row.cells[client].state != "on":
-                continue
-            for i in row.cells[client].items:
-                item = by_id.get(i)
-                if (
-                    item is not None
-                    and is_direct_entry(item, item.client, {Scope.USER})
-                    and item.name != SETUP_NAME
-                    and REMOVE_DIRECT in item.actions
-                ):
-                    return item.id
-        return None
-
-    def add(row: Row, client: str) -> dict | None:
-        if any(row.cells[c].state == "gw" for c in found):
-            return None
-        item = source(row)
-        if item is None or client in refused(item):
-            return None
-        return _add(MCP_ADD, "+ Add", item=item)
-
-    add.source = source  # the why of a cell names the reason a client cannot take it
-    return add
-
-
-def _server_why(
-    map_rows: list[Row], found: list[str], items: list[Item], cannot=lambda row, client: None
-) -> Why:
-    """A gateway entry: connect the client. A direct server another client loads: move it into
-    the gateway this client reaches, when the client gets no add (_server_add). A server only
-    this project has: Kitden adds MCP servers for all projects only. Other dashes have no
-    reason."""
-    by_id = {i.id: i for i in items}
-    servers = [r for r in map_rows if r.kind is ItemKind.MCP_SERVER]
-    on_gateway = {c for r in servers for c in found if r.cells[c].state == "gw"}
-
-    def movable(row: Row) -> bool:
-        # The same entries the Gateway page offers to move.
-        loaded = [
-            i
-            for c in found
-            if row.cells[c].state in ("on", "review", "unk")
-            for i in row.cells[c].items
-        ]
-        return any(
-            group_of(by_id[i]) == "move" and REMOVE_DIRECT in by_id[i].actions
-            for i in loaded
-            if i in by_id
-        )
-
-    def held(row: Row) -> bool:
-        """The Kitden gateway holds it: a client reaches it through its `kitden` entry."""
-        return any(
-            by_id[i].via_gateway == KITDEN_GATEWAY
-            for c in found
-            for i in row.cells[c].items
-            if i in by_id
-        )
-
-    def only_here(row: Row) -> bool:
-        """Every item of the row is set in a project: no all-projects entry to add from."""
-        loaded = [by_id[i] for c in found for i in row.cells[c].items if i in by_id]
-        return bool(loaded) and all(i.project is not None for i in loaded)
-
-    def why(row: Row, client: str) -> str | None:
-        if reason := cannot(row, client):
-            return reason
-        if client in on_gateway:
-            if movable(row):
-                return SHARE_IN_GATEWAY
-        elif any(row.cells[c].state == "gw" for c in found):
-            if held(row):
-                return f"Set up the Kitden gateway in {CLIENT_WORDS[client]} on the Gateway page."
-            return f"Connect {CLIENT_WORDS[client]} to the gateway on the Gateway page."
-        return NO_PROJECT_SERVER if only_here(row) else None
-
-    return why
-
-
-def _marketplace_why(offers: list[dict]) -> Why:
-    """A client gets a marketplace with the first plugin it adds from it. Cursor keeps its
-    plugins in the account, so Kitden adds none there and its dash has no reason."""
-    brings = {
-        (c, o["marketplace"])
-        for o in offers
-        for c, r in o["routes"].items()
-        if r == "add_marketplace"
-    }
-
-    def why(row: Row, client: str) -> str | None:
-        if (client, row.name) in brings:
-            return f"{CLIENT_WORDS[client]} gets it the first time you add one of its plugins."
-        return None
-
-    return why
 
 
 # Plugins -------------------------------------------------------------------------------------
@@ -455,12 +301,8 @@ def _plugin_rows(
             name,
             source,
             cells,
-            mine=bool(holders),
             lookup=row.lookup if row else None,
-            offer=offer["id"] if offer else None,
             flags=row.flags if row else [],
-            category=offer["category"] if offer else None,
-            description=offer["description"] if offer else "",
         )
         out.append((built, holders))
     return out
@@ -594,13 +436,9 @@ def _skill_rows(
             skill["name"],
             skill["from"],
             cells,
-            mine=bool(holders),
             lookup=row.lookup if row else None,
             # A project's own skill is in no marketplace: Details reads what the clients load.
-            offer=None if skill["project"] else skill["id"],
             flags=row.flags if row else [],
-            category=skill["category"],
-            description=skill["description"],
         )
         out.append((built, holders))
     named = {s["name"] for s in skills}
@@ -660,9 +498,7 @@ def _add_file(adapters, client: str, add: dict, project: str | None) -> str | No
     try:
         if adapter is None:
             return None
-        if add["action"] == MCP_ADD:
-            step = adapter.add_server_step("entry", {})  # the name does not change the file
-        elif add["action"] == PLUGIN_INSTALL:
+        if add["action"] == PLUGIN_INSTALL:
             step = adapter.plugin_install_step(add["plugin"], project)
         else:
             return None
@@ -672,11 +508,11 @@ def _add_file(adapters, client: str, add: dict, project: str | None) -> str | No
 
 
 def _no_add_in_review(rows: list[dict]) -> None:
-    """In an MCP server or skill row with a Needs review cell no cell offers an add: it would
+    """In a skill row with a Needs review cell no cell offers an add: it would
     copy one side without asking. Every empty cell says so, unless it says why already."""
     for row in rows:
         cells = row["cells"].values()
-        if row["kind"] not in ("mcp_server", "skill") or all(c["state"] != "review" for c in cells):
+        if row["kind"] != "skill" or all(c["state"] != "review" for c in cells):
             continue
         for cell in cells:
             if cell["add"] or (cell["state"] == "none" and not cell["reason"]):
@@ -730,59 +566,8 @@ def _in_view(row: dict, holders: set[str], visible: list[str]) -> bool:
     return any(row["cells"][c]["state"] != "none" or row["cells"][c]["add"] for c in visible)
 
 
-def _matching(rows: list[dict], q: str, kind: str) -> list[dict]:
-    """Rows that match the search: on plugins and skills best first (catalog.search), on the
-    other tabs any part of the name ("hub" finds github)."""
-    if not q.strip():
-        return rows
-    if kind not in CATALOG_KINDS:
-        part = q.strip().lower()
-        return [r for r in rows if part in r["name"].lower()]
-    terms = [
-        {
-            "name": r["name"],
-            "description": r["description"],
-            "category": r["category"],
-            "from": r["source"] if r["kind"] == "skill" else None,
-            "marketplace": r["source"] if r["kind"] == "plugin" else None,
-            "at": i,
-        }
-        for i, r in enumerate(rows)
-    ]
-    return [rows[t["at"]] for t in search(terms, q)]
-
-
-def _chosen(rows: list[dict], kind: str, show: str, q: str) -> list[dict]:
-    """Rows the show choice keeps, matching the search."""
-    kept = [r for r in rows if show == "all" or r["mine"] == (show == "mine")]
-    return _matching(kept, q, kind)
-
-
 def _needs_attention(row: dict) -> bool:
     return any(f.get("level") == "warning" for f in row["flags"])
-
-
-def _narrowed(rows: list[dict], category: str, attention: bool) -> list[dict]:
-    return [
-        r
-        for r in rows
-        if (not category or r["category"] == category) and (not attention or _needs_attention(r))
-    ]
-
-
-def _categories(rows: list[dict]) -> list[dict]:
-    seen: dict[str, int] = {}
-    for row in rows:
-        if row["category"]:
-            seen[row["category"]] = seen.get(row["category"], 0) + 1
-    return [{"name": n, "count": c} for n, c in sorted(seen.items(), key=lambda p: (-p[1], p[0]))]
-
-
-def _ordered(rows: list[dict], ranked: bool) -> list[dict]:
-    """What is on this computer first; inside each group the search rank, or else by name."""
-    if ranked:
-        return sorted(rows, key=lambda r: not r["mine"])  # stable: keeps the search rank
-    return sorted(rows, key=lambda r: (not r["mine"], r["name"].lower(), r["source"] or ""))
 
 
 def _notes(rows: list[dict], visible: list[str]) -> list[str]:
@@ -828,24 +613,7 @@ def _tables(
     map_rows = load_map(inventory, project, gateway_registered=gateway_registered)
     offers = catalog(inventory, adapters)
     skills = skill_catalog(inventory, adapters)
-    # A client that cannot take a direct server gets its reason in place of an add.
-    refused = _refusals(adapters, inventory.items)
-    server_add = _server_add(found, inventory.items, refused)
-
-    def cannot(row: Row, client: str) -> str | None:
-        if row.cells[client].state == "on":
-            return None
-        item = server_add.source(row)
-        return refused(item).get(client) if item else None
-
     built = {
-        "mcp_server": _map_rows(
-            map_rows,
-            "mcp_server",
-            found,
-            _server_why(map_rows, found, inventory.items, cannot),
-            server_add,
-        ),
         "plugin": _plugin_rows(
             map_rows, offers, skills, found, imports, in_project=project is not None
         ),
@@ -863,10 +631,6 @@ def _tables(
         ),
         # Kitden adds no hooks, so a hook's dash has no reason.
         "hook": _map_rows(map_rows, "hook", found),
-        "marketplace": _map_rows(map_rows, "marketplace", found, _marketplace_why(offers)),
-        # Instruction files, commands and agents: Details says when each client reads a file.
-        # Kitden adds none, so a dash has no reason.
-        "instructions": _map_rows(map_rows, "instructions", found),
     }
     by_key = {r.key: r for r in map_rows}
     # A shown client Kitden could not read makes a row visible only with items kept from its
@@ -878,9 +642,8 @@ def _tables(
         rows[k] = []
         for r, holders in pairs:
             known = by_key.get(r["key"])
-            if known and any(known.cells[c].stale_at for c in unread):
-                r["mine"] = True
-            elif not _in_view(r, holders, visible):
+            kept = known and any(known.cells[c].stale_at for c in unread)
+            if not kept and not _in_view(r, holders, visible):
                 continue
             rows[k].append(r)
     return _Tables(columns, found, hidden, visible, homes, rows, by_key)
@@ -909,56 +672,6 @@ def _columns(t: _Tables) -> list[dict]:
         }
         for c in t.columns
     ]
-
-
-def library(
-    inventory,
-    adapters,
-    project: str | None,
-    *,
-    gateway_registered: bool,
-    kind: str,
-    show: str = "mine",
-    q: str = "",
-    category: str = "",
-    hidden: frozenset[str] = frozenset(),
-    attention: bool = False,
-) -> dict:
-    """The rows of one kind, with the columns, the counts and the lines above them. The List
-    (`library_list`) takes its cells from these rows.
-
-    `show` is "mine" (on this computer), "new" (not on this computer yet) or "all"; the kinds
-    without a catalog always show what is on this computer. `hidden` columns stay in
-    `columns`, marked, and a row that only they have is left out; hiding every found client
-    hides none. Counts follow show, search and hidden, not the category.
-    """
-    t = _tables(inventory, adapters, project, gateway_registered=gateway_registered, hidden=hidden)
-    rows = t.rows
-    _finish(t, kind, inventory, adapters, project)
-
-    def show_for(k: str) -> str:
-        return show if k in CATALOG_KINDS else "mine"
-
-    has_catalog = kind in CATALOG_KINDS
-    category = category if has_catalog else ""
-    matched = _chosen(rows[kind], kind, show_for(kind), q)
-    shown = _narrowed(matched, category, attention)
-    more = 0
-    if q.strip() and has_catalog and show != "all":
-        everything = _narrowed(_chosen(rows[kind], kind, "all", q), category, attention)
-        more = len(everything) - len(shown)
-    return {
-        "columns": _columns(t),
-        "counts": {
-            k: len(matched) if k == kind else len(_chosen(rows[k], k, show_for(k), q))
-            for k in KINDS
-        },
-        "rows": _ordered(shown, ranked=bool(q.strip()) and has_catalog),
-        "more": more,
-        "attention": len(_narrowed(matched, category, True)),
-        "categories": _categories(matched) if has_catalog else [],
-        "notes": _read_notes(inventory, project, t.homes) + _notes(shown, t.visible),
-    }
 
 
 # The List ------------------------------------------------------------------------------------

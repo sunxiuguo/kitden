@@ -251,9 +251,12 @@ def test_a_marketplace_from_a_folder_goes_to_codex_and_undo_removes_it(client, t
     applied = client.post(f"/api/changes/{change['id']}/apply", headers=POST).json()
     assert applied["state"] == "verified", applied.get("error")
     # Its plugins show in the Library at once, ready to add to Codex.
-    rows = client.get("/api/library?kind=plugin&show=new").json()["rows"]
-    added = next(r for r in rows if r["offer"] == "a@team-tools")
-    assert added["cells"]["codex"]["add"]["action"] == "plugin.install"
+    rows = client.get("/api/library-offers").json()["offers"]
+    added = next(r for r in rows if r["id"] == "a@team-tools")
+    assert added["kind"] == "plugin"
+    assert added["routes"]["codex"] == "ready"
+    assert "codex" not in added["installed"]
+    assert added["refusal"] is None
     undone = client.post(f"/api/changes/{change['id']}/undo", headers=POST).json()
     assert undone["state"] == "undone"
     assert _files(client.home) == before

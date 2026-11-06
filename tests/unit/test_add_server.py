@@ -35,26 +35,26 @@ def _item(page, who, name, scope="user"):
 
 
 def _rows(page):
-    return {r["name"]: r for r in page.get("/api/library?kind=mcp_server").json()["rows"]}
+    return {r["name"]: r for r in page.get("/api/map").json()["rows"]}
 
 
-def test_the_library_offers_add_for_a_direct_server_another_client_lacks(home):
+def test_direct_servers_can_be_previewed_for_clients_that_lack_them(home):
     with page_for(home) as page:
-        rows = _rows(page)
-        github = _item(page, "claude_code", "github")["id"]
-        for client in ("codex", "cursor"):
-            add = rows["github"]["cells"][client]["add"]
-            assert (add["action"], add["label"], add["item"]) == ("mcp.add", "+ Add", github)
-            assert rows["github"]["cells"][client]["reason"] is None
-        n8n = _item(page, "cursor", "n8n-mcp")["id"]  # a local server is copied too
-        assert rows["n8n-mcp"]["cells"]["claude_code"]["add"]["item"] == n8n
-        # Names match exactly: Cursor's Neon is not Codex's neon.
-        neon = _item(page, "codex", "neon")["id"]
-        assert rows["neon"]["cells"]["cursor"]["add"]["item"] == neon
-        # A server that is turned off has no source to copy.
-        assert rows["aseprite"]["cells"]["claude_code"]["add"] is None
-        # A project entry is shown only in a project view; it is no source.
-        assert "docs" not in rows
+        for owner, name, targets in (
+            ("claude_code", "github", ("codex", "cursor")),
+            ("cursor", "n8n-mcp", ("claude_code",)),
+            ("codex", "neon", ("cursor",)),
+        ):
+            item = _item(page, owner, name)
+            for client in targets:
+                response = _add(page, item["id"], client)
+                assert response.status_code == 200, response.text
+                change = response.json()
+                assert [(s["client"], s["name"]) for s in change["steps"]] == [(client, name)]
+                page.post(f"/api/changes/{change['id']}/cancel", headers=POST)
+        off = _item(page, "codex", "aseprite")
+        assert _add(page, off["id"], "claude_code").status_code == 422
+        assert "docs" not in _rows(page)
 
 
 def test_adding_a_server_to_another_client_previews_applies_and_undoes(home):
@@ -149,8 +149,7 @@ def test_project_entries_and_kitdens_own_entry_are_refused(home):
         assert _add(page, kitden["id"], "codex").json()["detail"] == (
             "Kitden's own entry stays in each client."
         )
-        rows = _rows(page)
-        assert all(c["add"] is None for c in rows["kitden"]["cells"].values())
+        assert _add(page, kitden["id"], "cursor").status_code == 422
 
 
 def test_an_unknown_item_or_no_client_is_refused(home):

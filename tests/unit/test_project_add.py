@@ -43,6 +43,13 @@ def pid(client, folder):
     return next(p["id"] for p in client.get("/api/projects").json() if p["path"] == folder)
 
 
+def _library_items(client, project=None):
+    params = {"project": project} if project else {}
+    response = client.get("/api/library-list", params=params)
+    assert response.status_code == 200
+    return [item for group in response.json()["groups"] for item in group["items"]]
+
+
 def _preview(client, action, chosen, params):
     body = {"action": action, "targets": [{"client": c} for c in chosen], "params": params}
     return client.post("/api/changes/preview", json=body, headers=POST)
@@ -61,15 +68,12 @@ def test_a_skill_goes_into_the_project_folder(client):
     assert change["shared_file_warning"] is True
     apply = client.post(f"/api/changes/{change['id']}/apply", headers=POST).json()
     assert apply["state"] == "verified"
-    rows = client.get(f"/api/library?kind=skill&project={pid(client, website)}").json()["rows"]
+    rows = _library_items(client, pid(client, website))
     tidy = next(r for r in rows if r["name"] == "tidy")
     cell = tidy["cells"]["claude_code"]
     assert (cell["state"], cell["where"]) == ("on", "Only this project")
-    everywhere = client.get("/api/library?kind=skill&show=all").json()["rows"]
-    assert (
-        next(r for r in everywhere if r["name"] == "tidy")["cells"]["claude_code"]["state"]
-        == "none"
-    )
+    everywhere = _library_items(client)
+    assert not any(r["name"] == "tidy" for r in everywhere)
     undo = client.post(f"/api/changes/{change['id']}/undo", headers=POST).json()
     assert undo["state"] == "undone"
     assert not (home / "work/website/.claude/skills/tidy").exists()
@@ -133,26 +137,35 @@ def test_codex_has_no_project_place_for_a_plugin(client):
     assert (unknown.status_code, unknown.json()["detail"]) == (422, "Unknown project.")
 
 
-def test_the_cells_say_which_adds_have_a_project_place(client):
+def test_catalog_offers_preview_the_supported_project_places(client):
     website = pid(client, str(client.home / "work/website"))
-    skills = client.get(f"/api/library?kind=skill&show=new&project={website}").json()["rows"]
-    tidy = next(r for r in skills if r["name"] == "tidy")
-    # Codex does not trust website (see the test below); the others can add into it.
-    assert all(tidy["cells"][c]["add"]["project_place"] is True for c in ("claude_code", "cursor"))
-    plugins = client.get(f"/api/library?kind=plugin&show=new&project={website}").json()["rows"]
-    linter = next(r for r in plugins if r["name"] == "linter")
-    claude, codex = linter["cells"]["claude_code"]["add"], linter["cells"]["codex"]["add"]
-    assert (claude["project_place"], claude["project_hint"]) == (True, None)
-    assert (codex["project_place"], codex["project_hint"]) == (
-        False,
-        "Codex plugins are for all projects.",
+    offers = client.get("/api/library-offers").json()["offers"]
+    tidy = next(r for r in offers if r["id"] == TIDY)
+    assert {"claude_code", "cursor"} <= tidy["routes"].keys()
+    for who in ("claude_code", "cursor"):
+        response = _preview(client, "skill.install", [who], {"skill": TIDY, "project": website})
+        assert response.status_code == 200
+        change = response.json()
+        assert change["steps"][0]["scope"] == "project"
+        client.post(f"/api/changes/{change['id']}/cancel", headers=POST)
+    linter = next(r for r in offers if r["id"] == LINTER)
+    assert {"claude_code", "codex"} <= linter["routes"].keys()
+    response = _preview(
+        client, "plugin.install", ["claude_code"], {"plugin": LINTER, "project": website}
+    )
+    assert response.status_code == 200
+    assert response.json()["steps"][0]["scope"] == "project"
+    refused = _preview(client, "plugin.install", ["codex"], {"plugin": LINTER, "project": website})
+    assert (refused.status_code, refused.json()["detail"]) == (
+        422,
+        "Codex has no project place for a plugin here; add it for all projects.",
     )
 
 
 def test_cursor_plugin_cells_say_where_to_add_per_project(client):
     """Cursor keeps its plugins in its own database: in a project view its cell says where."""
     website = pid(client, str(client.home / "work/website"))
-    plugins = client.get(f"/api/library?kind=plugin&show=all&project={website}").json()["rows"]
+    plugins = [r for r in _library_items(client, website) if r["kind"] == "plugin"]
     cursor = [
         r["cells"]["cursor"]
         for r in plugins
@@ -162,7 +175,7 @@ def test_cursor_plugin_cells_say_where_to_add_per_project(client):
     for cell in cursor:
         said = (cell["add"] or {}).get("project_hint") or cell["reason"] or ""
         assert "Customize → Plugins, Install, then choose the project scope." in said, cell
-    everywhere = client.get("/api/library?kind=plugin&show=all").json()["rows"]
+    everywhere = [r for r in _library_items(client) if r["kind"] == "plugin"]
     for row in everywhere:
         cell = row["cells"]["cursor"]
         assert "Customize" not in ((cell["add"] or {}).get("project_hint") or cell["reason"] or "")
@@ -174,19 +187,40 @@ def test_an_add_without_a_project_stays_for_all_projects(client):
     assert change["steps"][0]["scope"] == "user"
 
 
-def test_codex_offers_no_project_place_in_a_project_it_does_not_trust(client):
-    """website is not trusted by Codex: its skill add goes to all projects and says why."""
+def test_catalog_skill_preview_requires_codex_project_trust(client):
+    """An offered skill can go into a trusted project, but not an untrusted one."""
+    offers = client.get("/api/library-offers").json()["offers"]
+    tidy = next(r for r in offers if r["id"] == TIDY)
+    assert "codex" in tidy["routes"]
     website = pid(client, str(client.home / "work/website"))
-    rows = client.get(f"/api/library?kind=skill&show=new&project={website}").json()["rows"]
+    refused = _preview(client, "skill.install", ["codex"], {"skill": TIDY, "project": website})
+    assert (refused.status_code, refused.json()["detail"]) == (
+        422,
+        "Codex does not trust website yet, so it would not load the skill there.",
+    )
+    api = pid(client, str(client.home / "work/api"))
+    response = _preview(client, "skill.install", ["codex"], {"skill": TIDY, "project": api})
+    assert response.status_code == 200
+    assert response.json()["steps"][0]["scope"] == "project"
+
+
+def test_installed_skill_cells_explain_codex_project_trust(client):
+    change = _preview(client, "skill.install", ["claude_code"], {"skill": TIDY}).json()
+    applied = client.post(f"/api/changes/{change['id']}/apply", headers=POST).json()
+    assert applied["state"] == "verified"
+    website = pid(client, str(client.home / "work/website"))
+    rows = _library_items(client, website)
     add = next(r for r in rows if r["name"] == "tidy")["cells"]["codex"]["add"]
     assert (add["project_place"], add["project_hint"]) == (
         False,
         "Adds for all projects. To add it to website only, trust website in Codex first.",
     )
     api = pid(client, str(client.home / "work/api"))
-    rows = client.get(f"/api/library?kind=skill&show=new&project={api}").json()["rows"]
+    rows = _library_items(client, api)
     add = next(r for r in rows if r["name"] == "tidy")["cells"]["codex"]["add"]
     assert (add["project_place"], add["project_hint"]) == (True, None)
+    undone = client.post(f"/api/changes/{change['id']}/undo", headers=POST).json()
+    assert undone["state"] == "undone"
 
 
 def test_a_skill_add_into_a_known_project_on_another_disk_previews(client, tmp_path):
@@ -239,7 +273,7 @@ def test_a_project_skill_copies_into_the_same_project(client):
 def test_a_project_skill_for_codex_in_an_untrusted_project_says_trust_first(client):
     _project_skill(client, "untrusted")
     untrusted = pid(client, str(client.home / "work/untrusted"))
-    rows = client.get(f"/api/library?kind=skill&project={untrusted}").json()["rows"]
+    rows = _library_items(client, untrusted)
     codex = next(r for r in rows if r["name"] == "house-style")["cells"]["codex"]
     assert (codex["add"], codex["reason"]) == (
         None,
@@ -272,7 +306,7 @@ def test_a_client_with_the_skill_folder_on_disk_gets_no_copy(client):
     (folder / "SKILL.md").write_text(HOUSE)
     client.post("/api/rescan", headers=POST)  # a fixture home: no held servers to ask
     site = pid(client, str(client.home / "work/site"))
-    rows = client.get(f"/api/library?kind=skill&project={site}").json()["rows"]
+    rows = _library_items(client, site)
     cells = next(r for r in rows if r["name"] == "house-style")["cells"]
     assert cells["cursor"]["state"] == "on"
     assert (cells["claude_code"]["add"], cells["claude_code"]["state"]) == (None, "on")
@@ -281,7 +315,7 @@ def test_a_client_with_the_skill_folder_on_disk_gets_no_copy(client):
 def test_cursor_gets_no_copy_of_a_skill_it_reads_from_claude_codes_project_folder(client):
     # website/.claude/skills/site-style is Claude Code's; Cursor reads that folder too.
     website = pid(client, str(client.home / "work/website"))
-    rows = client.get(f"/api/library?kind=skill&project={website}").json()["rows"]
+    rows = _library_items(client, website)
     cursor = next(r for r in rows if r["name"] == "site-style")["cells"]["cursor"]
     assert (cursor["add"], cursor["state"], cursor["route"]) == (
         None,

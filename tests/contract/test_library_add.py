@@ -46,14 +46,9 @@ def _run(client, body):
     return change["id"]
 
 
-def _cells(client, plugin):
-    """The plugin's Library cells: what each client has, or the add it offers."""
-    rows = client.get("/api/library?kind=plugin&show=all").json()["rows"]
-    row = next(r for r in rows if r["offer"] == plugin)
-    return {
-        c: cell["add"]["action"] if cell["add"] else cell["state"]
-        for c, cell in row["cells"].items()
-    }
+def _offer(client, plugin):
+    rows = client.get("/api/library-offers").json()["offers"]
+    return next(row for row in rows if row["id"] == plugin)
 
 
 def _settings(home):
@@ -70,15 +65,15 @@ def test_add_a_marketplace_and_a_plugin_to_both_clients_then_undo(client):
     added = _run(
         client, {"action": "marketplace.add", "targets": both, "params": {"source": str(ROOT)}}
     )
-    assert _cells(client, "kitden@kitden") == {
-        "claude_code": "plugin.install",
-        "codex": "plugin.install",
-    }
+    offer = _offer(client, "kitden@kitden")
+    assert offer["installed"] == []
+    assert offer["routes"] == {"claude_code": "ready", "codex": "ready"}
+    assert offer["refusal"] is None
 
     installed = _run(
         client, {"action": "plugin.install", "targets": both, "params": {"plugin": "kitden@kitden"}}
     )
-    assert _cells(client, "kitden@kitden") == {"claude_code": "on", "codex": "on"}
+    assert set(_offer(client, "kitden@kitden")["installed"]) == {"claude_code", "codex"}
     assert tomllib.loads((home / ".codex/config.toml").read_text())["plugins"]["kitden@kitden"] == {
         "enabled": True
     }

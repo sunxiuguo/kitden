@@ -22,7 +22,7 @@ from kitden.gateways import data_dir
 from kitden.local_gateway.settings import load_settings
 from kitden.mcp_server import create_server
 from kitden.views.inventory import build_inventory, default_adapters
-from kitden.views.library import KINDS
+from kitden.views.library import LIST_TABS
 from kitden.web.app import create_app
 from tests.conftest import make_home, write_cursor_fixture_state
 from tests.unit.test_api_changes import FakeClaude
@@ -180,9 +180,8 @@ def _page_outputs(home) -> list[str]:
             outputs.append(page.get(path).text)
         for item in page.get("/api/items?kind=mcp_server").json():
             outputs.append(page.get(f"/api/explain?name={item['name']}&kind=mcp_server").text)
-        # Instruction files: Details shows their first lines.
-        outputs.append(page.get("/api/library?kind=instructions").text)
-        for tab in ("plugin", "instructions"):
+        # Both active tabs; instruction Details also shows masked first lines below.
+        for tab in LIST_TABS:
             outputs.append(page.get(f"/api/library-list?kind={tab}").text)
         projects = [f"&project={p['id']}" for p in page.get("/api/projects").json()]
         for query in ["", *projects]:
@@ -302,13 +301,12 @@ def _demo_outputs(home) -> list[str]:
             ]:
                 get(path + query)
             get("/api/findings" + (f"?project={quote(project['path'])}" if project else ""))
-        for kind in KINDS:
-            for project in [None, projects[0]]:
-                get(f"/api/library?kind={kind}" + (f"&project={project['id']}" if project else ""))
-        for tab in ("plugin", "instructions"):
+        for tab in LIST_TABS:
             for project in [None, projects[0]]:
                 where = f"&project={project['id']}" if project else ""
-                get(f"/api/library-list?kind={tab}&show=diff{where}")
+                # Differences applies to plugins and skills, not instruction files.
+                for show in ("mine", "diff") if tab == "plugin" else ("mine",):
+                    get(f"/api/library-list?kind={tab}&show={show}{where}")
         items = page.get("/api/items").json()
         explained = {
             (i["name"], i["kind"])

@@ -12,7 +12,7 @@ from starlette.testclient import TestClient
 from kitden.changes.actions import KITDEN_GATEWAY
 from kitden.cli import main
 from kitden.gateways import data_dir
-from kitden.views.library import KINDS
+from kitden.views.library import LIST_TABS
 from tests.unit.test_cli import _demo_run
 from tests.unit.test_demo_mode import POST, demo_page, preview, scan_done, until
 
@@ -141,8 +141,8 @@ def test_kitden_demo_as_it_starts_runs_no_program_and_goes_nowhere(
                 lambda: "note-taker" in [i["name"] for i in page.get("/api/items").json()],
                 seconds=20,
             )
-            for kind in KINDS:
-                assert page.get(f"/api/library?kind={kind}").status_code == 200
+            for kind in LIST_TABS:
+                assert page.get(f"/api/library-list?kind={kind}").status_code == 200
             undone = page.post(f"/api/changes/{add['id']}/undo", headers=post).json()
             assert undone["state"] == "undone"
 

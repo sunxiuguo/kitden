@@ -78,7 +78,7 @@ def test_removing_a_held_server_takes_its_rules_and_undo_restores(home):
         assert saved["servers"] == {"other": {"command": "x"}}
         assert saved["rules"] == {"global": {"other": {"server": "on"}}, "projects": {website: {}}}
         assert "files" in load_tools(home)  # found data stays
-        rows = page.get("/api/library?kind=mcp_server").json()["rows"]
+        rows = page.get("/api/map").json()["rows"]
         assert not any(r["name"] == "files" for r in rows)
         undone = page.post(f"/api/changes/{change['id']}/undo", headers=POST).json()
         assert undone["state"] == "undone"

@@ -135,7 +135,7 @@ def test_held_servers_show_via_kitden_gateway_in_connected_clients(home):
     assert (source.path, source.key_path) == (str(data_dir(home) / SETTINGS_FILE), "servers.files")
 
     with page_for(home) as page:
-        library = page.get("/api/library?kind=mcp_server")
+        library = page.get("/api/map")
         row = next(r for r in library.json()["rows"] if r["name"] == "files")
         cells = {c: (cell["state"], cell["route"]) for c, cell in row["cells"].items()}
         assert cells == {
@@ -144,9 +144,9 @@ def test_held_servers_show_via_kitden_gateway_in_connected_clients(home):
             "cursor": ("gw", "through the Kitden gateway"),
         }
         # Codex reaches it once it has the `kitden` entry: the Gateway page sets that up.
-        assert row["cells"]["codex"]["reason"] == (
-            "Set up the Kitden gateway in Codex on the Gateway page."
-        )
+        connections = page.get("/api/gateway-view").json()["connections"]["kitden"]
+        assert connections["codex"] == []
+        assert connections["claude_code"] and connections["cursor"]
         assert "SENTINEL_SECRET_FILES" not in library.text
         assert "SENTINEL_SECRET_FILES" not in page.get("/api/items").text
 
@@ -602,7 +602,7 @@ def test_the_library_follows_the_server_rules(home):
     )
 
     def cells(page, query=""):
-        rows = page.get(f"/api/library?kind=mcp_server{query}").json()["rows"]
+        rows = page.get(f"/api/map?{query}").json()["rows"]
         row = next(r for r in rows if r["name"] == "held")
         return {c: (cell["state"], cell["route"]) for c, cell in row["cells"].items()}
 
@@ -638,7 +638,7 @@ def test_a_carried_codex_off_reads_off(home):
         change = page.post("/api/changes/preview", json=body, headers=POST).json()
         applied = page.post(f"/api/changes/{change['id']}/apply", headers=POST).json()
         assert applied["state"] == "verified", applied
-        rows = page.get("/api/library?kind=mcp_server").json()["rows"]
+        rows = page.get("/api/map").json()["rows"]
         cell = next(r for r in rows if r["name"] == "echo")["cells"]["codex"]
         assert (cell["state"], cell["route"]) == ("off", "through the Kitden gateway")
 
@@ -915,7 +915,7 @@ def test_the_library_and_the_card_follow_enclosing_projects(home):
 
     def cell(page, folder):
         pid = project_id(page, str(folder))
-        rows = page.get(f"/api/library?kind=mcp_server&project={pid}").json()["rows"]
+        rows = page.get(f"/api/map?project={pid}").json()["rows"]
         return next(r for r in rows if r["name"] == "files")["cells"]["cursor"]["state"]
 
     def card(page, folder):

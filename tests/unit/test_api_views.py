@@ -12,7 +12,6 @@ from tests.conftest import make_home, write_cursor_fixture_state
 ORIGIN = "http://127.0.0.1:47800"
 ENDPOINTS = [
     "/api/map",
-    "/api/library",
     "/api/library-list",
     "/api/overview",
     "/api/gateway-view",
@@ -58,14 +57,16 @@ def test_map_everywhere_and_for_a_project(client):
 
 
 def test_library_everywhere_and_for_a_project(client):
-    everywhere = client.get("/api/library?kind=mcp_server").json()
+    everywhere = client.get("/api/library-list?kind=plugin").json()
     assert everywhere["project"] is None
     assert [c["id"] for c in everywhere["columns"]] == ["claude_code", "codex", "cursor"]
-    assert "site-db" not in {r["name"] for r in everywhere["rows"]}
+    assert "site-style" not in {r["name"] for g in everywhere["groups"] for r in g["items"]}
 
-    site = client.get(f"/api/library?kind=mcp_server&project={_project_id(client, 'work/site')}")
-    assert site.json()["project"]["path"] == str(client.home / "work/site")
-    assert "site-db" in {r["name"] for r in site.json()["rows"]}
+    site = client.get(
+        f"/api/library-list?kind=plugin&project={_project_id(client, 'work/website')}"
+    )
+    assert site.json()["project"]["path"] == str(client.home / "work/website")
+    assert "site-style" in {r["name"] for g in site.json()["groups"] for r in g["items"]}
 
 
 def test_overview_and_gateway_view(client):

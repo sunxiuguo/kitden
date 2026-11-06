@@ -167,7 +167,7 @@ from kitden.views.inventory import (
     item_dict,
     keep_last_good,
 )
-from kitden.views.library import KINDS, LIST_SHOWS, LIST_TABS, SHOWS, library, library_list
+from kitden.views.library import LIST_SHOWS, LIST_TABS, library_list
 from kitden.views.library_map import cursor_imports, library_map
 from kitden.views.load_map import load_map, map_dict
 from kitden.views.overview import overview
@@ -943,7 +943,7 @@ def create_app(
         return JSONResponse({"project": project, **map_dict(state.inventory, rows)})
 
     def _list_query(params) -> dict:
-        """What both Library lists read from the address: the search, the hidden columns and
+        """What the Library List reads from the address: the search, the hidden columns and
         Needs attention; and whether a gateway is registered."""
         return {
             "gateway_registered": bool(_registered()),
@@ -951,22 +951,6 @@ def create_app(
             "hidden": frozenset(c for c in params.get("hidden", "").split(",") if c),
             "attention": params.get("attention") == "1",
         }
-
-    def _library(request, project, path):
-        """One kind tab of the Library: rows, columns, counts and the lines above the table."""
-        params = request.query_params
-        kind = params.get("kind")
-        show = params.get("show")
-        answer = library(
-            state.inventory,
-            adapters,
-            path,
-            kind=kind if kind in KINDS else "mcp_server",
-            show=show if show in SHOWS else "mine",
-            category=params.get("category", ""),
-            **_list_query(params),
-        )
-        return JSONResponse({"project": project, **answer})
 
     def _library_list(request, project, path):
         """One tab of the Library's List: its groups, columns and the lines above them."""
@@ -1907,7 +1891,6 @@ def create_app(
             ),
             Route("/api/commands", commands),
             Route("/api/map", _read_model(_map)),
-            Route("/api/library", _read_model(_library)),
             Route("/api/library-list", _read_model(_library_list)),
             Route("/api/library-map", _read_model(_library_map)),
             Route("/api/instructions-map", _read_model(_instructions_map)),

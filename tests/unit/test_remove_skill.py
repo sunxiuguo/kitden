@@ -31,7 +31,12 @@ def _remove(client, item_id):
 
 
 def _row(client, name):
-    rows = client.get("/api/library?kind=skill").json()["rows"]
+    rows = [
+        item
+        for group in client.get("/api/library-list?kind=plugin").json()["groups"]
+        for item in group["items"]
+        if item["kind"] == "skill"
+    ]
     return next(r for r in rows if r["name"] == name)
 
 
@@ -59,7 +64,12 @@ def test_removing_a_skill_backs_it_up_and_undo_copies_it_back(client):
     assert not folder.exists()
     copies = list((data_dir(home) / "changes" / change["id"]).glob("folder-brandkit"))
     assert len(copies) == 1 and digest(copies[0]) == before
-    rows = client.get("/api/library?kind=skill").json()["rows"]
+    rows = [
+        item
+        for group in client.get("/api/library-list?kind=plugin").json()["groups"]
+        for item in group["items"]
+        if item["kind"] == "skill"
+    ]
     assert all(
         r["name"] != "brandkit" or r["cells"]["claude_code"]["state"] == "none" for r in rows
     )
